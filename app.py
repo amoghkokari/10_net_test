@@ -98,7 +98,12 @@ sector_colors = {sec: palette[i % len(palette)] for i, sec in enumerate(all_sect
 # Build graph (cached on the filtered frame + threshold)
 # ---------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def build_graph(frame: pd.DataFrame, threshold: float, include_segments: bool):
+def build_graph(_frame: pd.DataFrame, cache_key: tuple, threshold: float, include_segments: bool):
+    # `_frame` is excluded from Streamlit's hashing (leading underscore) because it has
+    # list-valued columns (Segment_List etc.) that aren't hashable. `cache_key` -- a plain
+    # tuple of company/year pairs -- stands in as the hashable signature of which rows
+    # are actually in play, so the cache still invalidates correctly when filters change.
+    frame = _frame
     G = nx.Graph()
     for _, row in frame.iterrows():
         G.add_node(
@@ -148,7 +153,8 @@ def build_graph(frame: pd.DataFrame, threshold: float, include_segments: bool):
     return G, len(sim_edges)
 
 with st.spinner("Building network..."):
-    G, n_sim_edges = build_graph(df_year, edge_threshold, show_segment_nodes)
+    _cache_key = tuple(zip(df_year["Company_Name"], df_year["Year"]))
+    G, n_sim_edges = build_graph(df_year, _cache_key, edge_threshold, show_segment_nodes)
 
 # Optional spring layout instead of raw embedding coordinates
 if layout_mode == "Force-directed (spring)":
@@ -364,7 +370,7 @@ fig.update_layout(
 )
 
 click_event = st.plotly_chart(
-    fig, use_container_width=True,
+    fig, width='stretch',
     on_select="rerun", selection_mode="points", key="network_chart",
 )
 
@@ -537,7 +543,10 @@ if whatif_mode == "A company from the network":
             "Illustrative exposure %": exposure,
         })
 
-    affected_df = pd.DataFrame(affected).sort_values("Illustrative exposure %", ascending=False)
+    affected_cols = ["Company", "Shared segments lost", "Similarity edges lost", "Illustrative exposure %"]
+    affected_df = pd.DataFrame(affected, columns=affected_cols)
+    if not affected_df.empty:
+        affected_df = affected_df.sort_values("Illustrative exposure %", ascending=False)
 
     seg_impact = []
     for seg in sorted(rc_segments):
@@ -554,7 +563,7 @@ if whatif_mode == "A company from the network":
 
     if not affected_df.empty:
         st.markdown(f"**Most exposed companies if {remove_company} exits:**")
-        st.dataframe(affected_df.head(10), use_container_width=True, hide_index=True)
+        st.dataframe(affected_df.head(10), width='stretch', hide_index=True)
         top = affected_df.iloc[0]
         st.markdown(
             f"⚠️ Illustratively, **{top['Company']}** looks most exposed, with an exposure score of "
@@ -564,7 +573,7 @@ if whatif_mode == "A company from the network":
         st.markdown(f"No other company in the current view is similarity-connected to **{remove_company}**.")
 
     st.markdown("**Segment coverage impact:**")
-    st.dataframe(seg_impact_df, use_container_width=True, hide_index=True)
+    st.dataframe(seg_impact_df, width='stretch', hide_index=True)
     orphaned = seg_impact_df[seg_impact_df["Orphaned?"] != "No"]
     if not orphaned.empty:
         st.markdown(f"⚠️ Removing **{remove_company}** would leave **{', '.join(orphaned['Segment'])}** "
@@ -599,7 +608,10 @@ else:
                 "Illustrative exposure %": exposure,
             })
 
-        affected_df = pd.DataFrame(affected).sort_values("Illustrative exposure %", ascending=False)
+        affected_cols = ["Company", "Status", "Illustrative exposure %"]
+        affected_df = pd.DataFrame(affected, columns=affected_cols)
+        if not affected_df.empty:
+            affected_df = affected_df.sort_values("Illustrative exposure %", ascending=False)
         coverage_before = int(df_year["Core_Products"].apply(lambda x: pick_product in x).sum())
 
         m1, m2, m3 = st.columns(3)
@@ -609,7 +621,7 @@ else:
 
         if not affected_df.empty:
             st.markdown(f"**Companies affected if {pick_company} drops \"{pick_product}\":**")
-            st.dataframe(affected_df, use_container_width=True, hide_index=True)
+            st.dataframe(affected_df, width='stretch', hide_index=True)
             fully_gone = affected_df[affected_df["Status"].str.startswith("🔴")]
             if not fully_gone.empty:
                 st.markdown(
